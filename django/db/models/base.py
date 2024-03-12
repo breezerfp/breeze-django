@@ -691,8 +691,8 @@ class Model(AltersData, metaclass=ModelBase):
             self._prefetched_objects_cache = {}
         else:
             prefetched_objects_cache = getattr(self, "_prefetched_objects_cache", ())
-            fields = list(fields)
-            for field in list(fields):
+            fields = set(fields)
+            for field in fields.copy():
                 if field in prefetched_objects_cache:
                     del prefetched_objects_cache[field]
                     fields.remove(field)
@@ -717,11 +717,11 @@ class Model(AltersData, metaclass=ModelBase):
         if fields is not None:
             db_instance_qs = db_instance_qs.only(*fields)
         elif deferred_fields:
-            fields = [
+            fields = {
                 f.attname
                 for f in self._meta.concrete_fields
                 if f.attname not in deferred_fields
-            ]
+            }
             db_instance_qs = db_instance_qs.only(*fields)
 
         db_instance = db_instance_qs.get()
@@ -740,12 +740,16 @@ class Model(AltersData, metaclass=ModelBase):
 
         # Clear cached relations.
         for field in self._meta.related_objects:
-            if field.is_cached(self):
+            if (fields is None or field.name in fields) and field.is_cached(self):
                 field.delete_cached_value(self)
 
         # Clear cached private relations.
         for field in self._meta.private_fields:
-            if field.is_relation and field.is_cached(self):
+            if (
+                (fields is None or field.name in fields)
+                and field.is_relation
+                and field.is_cached(self)
+            ):
                 field.delete_cached_value(self)
 
         self._state.db = db_instance._state.db
