@@ -54,7 +54,16 @@ from django.db.models import (
     Value,
 )
 from django.db.models.fields.json import KT, KeyTextTransform
-from django.db.models.functions import Abs, Cast, Collate, Lower, Random, Round, Upper
+from django.db.models.functions import (
+    Abs,
+    Cast,
+    Collate,
+    Concat,
+    Lower,
+    Random,
+    Round,
+    Upper,
+)
 from django.db.models.indexes import IndexExpression
 from django.db.transaction import TransactionManagementError, atomic
 from django.test import TransactionTestCase, skipIfDBFeature, skipUnlessDBFeature
@@ -885,6 +894,72 @@ class SchemaTests(TransactionTestCase):
 
         with connection.schema_editor() as editor:
             editor.create_model(GeneratedFieldOutputFieldModel)
+
+    @isolate_apps("schema")
+    @skipUnlessDBFeature("supports_stored_generated_columns")
+    def test_add_generated_field_contains(self):
+        class GeneratedFieldContainsModel(Model):
+            text = TextField(default="foo")
+            generated = GeneratedField(
+                expression=Concat("text", Value("%")),
+                db_persist=True,
+                output_field=TextField(),
+            )
+
+            class Meta:
+                app_label = "schema"
+
+        with connection.schema_editor() as editor:
+            editor.create_model(GeneratedFieldContainsModel)
+
+        field = GeneratedField(
+            expression=Q(text__contains="foo"),
+            db_persist=True,
+            output_field=BooleanField(),
+        )
+        field.contribute_to_class(GeneratedFieldContainsModel, "contains_foo")
+
+        with connection.schema_editor() as editor:
+            editor.add_field(GeneratedFieldContainsModel, field)
+
+        obj = GeneratedFieldContainsModel.objects.create()
+        obj.refresh_from_db()
+        self.assertEqual(obj.text, "foo")
+        self.assertEqual(obj.generated, "foo%")
+        self.assertIs(obj.contains_foo, True)
+
+    @isolate_apps("schema")
+    @skipUnlessDBFeature("supports_stored_generated_columns")
+    def test_alter_generated_field(self):
+        class GeneratedFieldIndexedModel(Model):
+            number = IntegerField(default=1)
+            generated = GeneratedField(
+                expression=F("number"),
+                db_persist=True,
+                output_field=IntegerField(),
+            )
+
+            class Meta:
+                app_label = "schema"
+
+        with connection.schema_editor() as editor:
+            editor.create_model(GeneratedFieldIndexedModel)
+
+        old_field = GeneratedFieldIndexedModel._meta.get_field("generated")
+        new_field = GeneratedField(
+            expression=F("number"),
+            db_persist=True,
+            db_index=True,
+            output_field=IntegerField(),
+        )
+        new_field.contribute_to_class(GeneratedFieldIndexedModel, "generated")
+
+        with connection.schema_editor() as editor:
+            editor.alter_field(GeneratedFieldIndexedModel, old_field, new_field)
+
+        self.assertIn(
+            "generated", self.get_indexes(GeneratedFieldIndexedModel._meta.db_table)
+        )
 
     @isolate_apps("schema")
     def test_add_auto_field(self):
